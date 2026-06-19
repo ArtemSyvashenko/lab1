@@ -1,0 +1,66 @@
+volumes:
+  db_data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: mywebapp_db
+    environment:
+      MARIADB_ROOT_PASSWORD: secret_password
+      MARIADB_DATABASE: mywebapp
+    networks:
+      - app-network
+    volumes:
+      - db_data:/var/lib/mysql
+    expose:
+      - "3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migration-runner:
+    build: .
+    container_name: mywebapp_migration
+    command: python migrate.py --db-host db --db-user root --db-password secret_password --db-name mywebapp
+    networks:
+      - app-network
+    depends_on:
+      db:
+        condition: service_healthy
+
+  webapp:
+    build: .
+    container_name: mywebapp_app
+    command: python app.py --db-host db --db-user root --db-password secret_password --db-name mywebapp --port 3000
+    networks:
+      - app-network
+    expose:
+      - "3000"
+    depends_on:
+      migration-runner:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health/alive', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    container_name: mywebapp_nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "0.0.0.0:80:80"
+    networks:
+      - app-network
+    depends_on:
+      webapp:
+        condition: service_healthy
